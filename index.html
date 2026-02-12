@@ -231,6 +231,23 @@
             background: #e8f5e9;
         }
 
+        .expand-collapse-btn {
+            padding: 10px 16px;
+            background: white;
+            color: #666;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .expand-collapse-btn:hover {
+            background: #f5f5f5;
+            border-color: #bbb;
+            color: #333;
+        }
+
         .add-task-btn {
             display: flex;
             align-items: center;
@@ -809,15 +826,96 @@
             handleTaskKeypress(event, path) {
                 if (event.key === 'Enter') {
                     event.preventDefault();
+                    const list = this.getCurrentList();
+                    if (!list) return;
+                    
+                    // Get the current task to check if it has text
+                    const getTask = (tasks, p) => {
+                        if (p.length === 1) return tasks[p[0]];
+                        return getTask(tasks[p[0]].subtasks, p.slice(1));
+                    };
+                    const currentTask = getTask(list.tasks, path);
+                    
+                    // If current task is empty, don't add a new one
+                    if (!currentTask.text || !currentTask.text.trim()) {
+                        return;
+                    }
+                    
                     // Close current editing
                     this.updateTask(path, { isEditing: false });
+                    
+                    // Determine the parent path - stay at same level
+                    let parentPath;
+                    if (path.length === 1) {
+                        // Top level - parent is root
+                        parentPath = [];
+                    } else {
+                        // Get parent path (everything except last index)
+                        parentPath = path.slice(0, -1);
+                    }
+                    
                     // Add new task at same level (insert after current)
-                    this.addTask(path.slice(0, -1), true);
+                    this.addTaskAfter(path);
                 }
             }
 
             handleTaskBlur(path) {
-                this.updateTask(path, { isEditing: false });
+                const list = this.getCurrentList();
+                if (!list) return;
+                
+                // Get the task being blurred
+                const getTask = (tasks, p) => {
+                    if (p.length === 1) return tasks[p[0]];
+                    return getTask(tasks[p[0]].subtasks, p.slice(1));
+                };
+                const task = getTask(list.tasks, path);
+                
+                // If task is empty, delete it instead of saving
+                if (!task.text || !task.text.trim()) {
+                    this.deleteTask(path);
+                } else {
+                    this.updateTask(path, { isEditing: false });
+                }
+            }
+
+            addTaskAfter(currentPath) {
+                const list = this.getCurrentList();
+                if (!list) return;
+
+                const newTask = {
+                    id: Date.now(),
+                    text: '',
+                    completed: false,
+                    subtasks: [],
+                    isEditing: true,
+                    isExpanded: false
+                };
+
+                const addAfterNested = (tasks, path) => {
+                    if (path.length === 1) {
+                        // Insert after current position
+                        const result = [...tasks];
+                        result.splice(path[0] + 1, 0, newTask);
+                        return result;
+                    }
+                    
+                    return tasks.map((task, i) => 
+                        i === path[0]
+                            ? { ...task, subtasks: addAfterNested(task.subtasks, path.slice(1)) }
+                            : task
+                    );
+                };
+
+                this.updateCurrentList(addAfterNested(list.tasks, currentPath));
+                this.render();
+                
+                // Focus the new input
+                setTimeout(() => {
+                    const inputs = document.querySelectorAll('.task-input');
+                    if (inputs.length > 0) {
+                        inputs[inputs.length - 1].focus();
+                    }
+                }, 0);
             }
 
             renderTaskItem(task, path) {
@@ -958,6 +1056,12 @@
                                 <h1 class="list-title">${currentList.name}</h1>
                             </div>
                             <div class="controls">
+                                <button class="expand-collapse-btn" onclick="app.expandAll()" title="Expand all tasks">
+                                    Expand All
+                                </button>
+                                <button class="expand-collapse-btn" onclick="app.collapseAll()" title="Collapse all tasks">
+                                    Collapse All
+                                </button>
                                 <button class="toggle-btn" onclick="app.toggleCompleted()">
                                     ${this.showCompleted ? icons.eye : icons.eyeOff}
                                     ${this.showCompleted ? 'Hide' : 'Show'} Completed
@@ -1007,6 +1111,38 @@
 
             toggleCompleted() {
                 this.showCompleted = !this.showCompleted;
+                this.render();
+            }
+
+            expandAll() {
+                const list = this.getCurrentList();
+                if (!list) return;
+
+                const expandNested = (tasks) => {
+                    return tasks.map(task => ({
+                        ...task,
+                        isExpanded: true,
+                        subtasks: expandNested(task.subtasks)
+                    }));
+                };
+
+                this.updateCurrentList(expandNested(list.tasks));
+                this.render();
+            }
+
+            collapseAll() {
+                const list = this.getCurrentList();
+                if (!list) return;
+
+                const collapseNested = (tasks) => {
+                    return tasks.map(task => ({
+                        ...task,
+                        isExpanded: false,
+                        subtasks: collapseNested(task.subtasks)
+                    }));
+                };
+
+                this.updateCurrentList(collapseNested(list.tasks));
                 this.render();
             }
         }

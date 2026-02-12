@@ -274,6 +274,20 @@
             background: #f5f5f5;
         }
 
+        .task-row.header-row {
+            background: linear-gradient(135deg, #fce4ec, #f8bbd0);
+            border-left: 4px solid #e91e63;
+        }
+
+        .task-row.header-row:hover {
+            background: linear-gradient(135deg, #f8bbd0, #fce4ec);
+        }
+
+        .task-text.header-text {
+            font-weight: 600;
+            color: #c2185b;
+        }
+
         .task-left {
             display: flex;
             align-items: center;
@@ -541,7 +555,7 @@
                 this.saveToStorage();
             }
 
-            addTask(parentPath = []) {
+            addTask(parentPath = [], insertAfter = false) {
                 const list = this.getCurrentList();
                 if (!list) return;
 
@@ -558,6 +572,14 @@
                     if (path.length === 0) {
                         return [...tasks, newTask];
                     }
+                    
+                    if (path.length === 1 && insertAfter) {
+                        // Insert after the current item at the same level
+                        const result = [...tasks];
+                        result.splice(path[0] + 1, 0, newTask);
+                        return result;
+                    }
+                    
                     return tasks.map((task, i) => 
                         i === path[0]
                             ? { ...task, subtasks: addToNested(task.subtasks, path.slice(1)), isExpanded: true }
@@ -577,30 +599,148 @@
                 }, 0);
             }
 
+            isHeader(task) {
+                return task.subtasks && task.subtasks.length > 0;
+            }
+
             updateTask(path, updates) {
                 const list = this.getCurrentList();
                 if (!list) return;
 
-                const updateNested = (tasks, p) => {
-                    if (p.length === 1) {
-                        return tasks.map((task, i) => 
-                            i === p[0] ? { ...task, ...updates } : task
-                        );
-                    }
-                    return tasks.map((task, i) => 
-                        i === p[0]
-                            ? { ...task, subtasks: updateNested(task.subtasks, p.slice(1)) }
-                            : task
-                    );
+                // Get the task being updated to check if it's a header
+                const getTask = (tasks, p) => {
+                    if (p.length === 1) return tasks[p[0]];
+                    return getTask(tasks[p[0]].subtasks, p.slice(1));
                 };
+                
+                const task = getTask(list.tasks, path);
+                
+                // If marking a header as complete, mark all subtasks as complete
+                if (updates.completed !== undefined && this.isHeader(task)) {
+                    updates = { ...updates };
+                    const markAllSubtasks = (t, completed) => {
+                        return {
+                            ...t,
+                            completed,
+                            subtasks: t.subtasks.map(st => markAllSubtasks(st, completed))
+                        };
+                    };
+                    
+                    const updateNested = (tasks, p) => {
+                        if (p.length === 1) {
+                            return tasks.map((task, i) => 
+                                i === p[0] ? markAllSubtasks({ ...task, ...updates }, updates.completed) : task
+                            );
+                        }
+                        return tasks.map((task, i) => 
+                            i === p[0]
+                                ? { ...task, subtasks: updateNested(task.subtasks, p.slice(1)) }
+                                : task
+                        );
+                    };
+                    
+                    this.updateCurrentList(updateNested(list.tasks, path));
+                } else {
+                    // Normal update
+                    const updateNested = (tasks, p) => {
+                        if (p.length === 1) {
+                            return tasks.map((task, i) => 
+                                i === p[0] ? { ...task, ...updates } : task
+                            );
+                        }
+                        return tasks.map((task, i) => 
+                            i === p[0]
+                                ? { ...task, subtasks: updateNested(task.subtasks, p.slice(1)) }
+                                : task
+                        );
+                    };
+                    
+                    this.updateCurrentList(updateNested(list.tasks, path));
+                    
+                    // Check if all subtasks are complete and update parent
+                    if (updates.completed !== undefined) {
+                        this.updateParentCompletion(path);
+                    }
+                }
 
-                this.updateCurrentList(updateNested(list.tasks, path));
-
-                if (updates.completed === true) {
+                if (updates.completed === true && !this.isHeader(task)) {
                     this.showCelebration();
                 }
 
                 this.render();
+            }
+
+            updateParentCompletion(childPath) {
+                if (childPath.length <= 1) return; // No parent to update
+                
+                const list = this.getCurrentList();
+                const parentPath = childPath.slice(0, -1);
+                
+                const getTask = (tasks, p) => {
+                    if (p.length === 1) return tasks[p[0]];
+                    return getTask(tasks[p[0]].subtasks, p.slice(1));
+                };
+                
+                const parent = getTask(list.tasks, parentPath);
+                
+                // Check if all subtasks are complete
+                const allSubtasksComplete = parent.subtasks.every(st => {
+                    if (this.isHeader(st)) {
+                        return this.areAllSubtasksComplete(st);
+                    }
+                    return st.completed;
+                });
+                
+                if (allSubtasksComplete && !parent.completed) {
+                    const updateNested = (tasks, p) => {
+                        if (p.length === 1) {
+                            return tasks.map((task, i) => 
+                                i === p[0] ? { ...task, completed: true } : task
+                            );
+                        }
+                        return tasks.map((task, i) => 
+                            i === p[0]
+                                ? { ...task, subtasks: updateNested(task.subtasks, p.slice(1)) }
+                                : task
+                        );
+                    };
+                    
+                    this.lists = this.lists.map(l => 
+                        l.id === this.currentListId ? { ...l, tasks: updateNested(l.tasks, parentPath) } : l
+                    );
+                    this.saveToStorage();
+                    
+                    // Recursively check parent's parent
+                    this.updateParentCompletion(parentPath);
+                } else if (!allSubtasksComplete && parent.completed) {
+                    // If not all subtasks complete but parent is, uncheck parent
+                    const updateNested = (tasks, p) => {
+                        if (p.length === 1) {
+                            return tasks.map((task, i) => 
+                                i === p[0] ? { ...task, completed: false } : task
+                            );
+                        }
+                        return tasks.map((task, i) => 
+                            i === p[0]
+                                ? { ...task, subtasks: updateNested(task.subtasks, p.slice(1)) }
+                                : task
+                        );
+                    };
+                    
+                    this.lists = this.lists.map(l => 
+                        l.id === this.currentListId ? { ...l, tasks: updateNested(l.tasks, parentPath) } : l
+                    );
+                    this.saveToStorage();
+                }
+            }
+
+            areAllSubtasksComplete(task) {
+                return task.subtasks.every(st => {
+                    if (this.isHeader(st)) {
+                        return this.areAllSubtasksComplete(st);
+                    }
+                    return st.completed;
+                });
             }
 
             deleteTask(path) {
@@ -623,6 +763,30 @@
             }
 
             getProgress(task) {
+                // For headers, only count subtasks (not the header itself)
+                if (this.isHeader(task)) {
+                    const count = (subtasks) => {
+                        let completed = 0;
+                        let total = 0;
+                        
+                        subtasks.forEach(st => {
+                            if (this.isHeader(st)) {
+                                const subProgress = count(st.subtasks);
+                                completed += subProgress.completed;
+                                total += subProgress.total;
+                            } else {
+                                total += 1;
+                                if (st.completed) completed += 1;
+                            }
+                        });
+                        
+                        return { completed, total };
+                    };
+                    
+                    return count(task.subtasks);
+                }
+                
+                // For non-headers, count normally
                 const count = (t) => {
                     const self = t.completed ? 1 : 0;
                     const children = t.subtasks.reduce((sum, st) => sum + count(st).completed, 0);
@@ -642,10 +806,25 @@
                 }, 2000);
             }
 
+            handleTaskKeypress(event, path) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    // Close current editing
+                    this.updateTask(path, { isEditing: false });
+                    // Add new task at same level (insert after current)
+                    this.addTask(path.slice(0, -1), true);
+                }
+            }
+
+            handleTaskBlur(path) {
+                this.updateTask(path, { isEditing: false });
+            }
+
             renderTaskItem(task, path) {
                 const progress = this.getProgress(task);
                 const hasSubtasks = task.subtasks.length > 0;
                 const shouldShow = this.showCompleted || !task.completed;
+                const isHeader = this.isHeader(task);
 
                 if (!shouldShow) return '';
 
@@ -659,7 +838,7 @@
 
                 return `
                     <div class="task-item">
-                        <div class="task-row">
+                        <div class="task-row ${isHeader ? 'header-row' : ''}">
                             <div class="task-left">
                                 ${hasSubtasks ? `
                                     <button class="expand-btn" onclick="app.updateTask([${path}], { isExpanded: ${!task.isExpanded} })">
@@ -667,7 +846,8 @@
                                     </button>
                                 ` : '<span style="width: 20px;"></span>'}
                                 <button class="checkbox ${task.completed ? 'checked' : ''}" 
-                                        onclick="app.updateTask([${path}], { completed: ${!task.completed} })">
+                                        onclick="app.updateTask([${path}], { completed: ${!task.completed} })"
+                                        title="${isHeader ? 'Check/uncheck all subtasks' : 'Mark complete'}">
                                     ${task.completed ? icons.check : ''}
                                 </button>
                                 ${task.isEditing ? `
@@ -675,11 +855,11 @@
                                            class="task-input" 
                                            value="${task.text || ''}"
                                            placeholder="Enter task..."
-                                           onblur="app.updateTask([${path}], { isEditing: false })"
-                                           onkeypress="if(event.key==='Enter') app.updateTask([${path}], { isEditing: false })"
+                                           onblur="app.handleTaskBlur([${path}])"
+                                           onkeypress="app.handleTaskKeypress(event, [${path}])"
                                            oninput="app.updateTaskText([${path}], this.value)">
                                 ` : `
-                                    <span class="task-text ${task.completed ? 'completed' : ''}"
+                                    <span class="task-text ${task.completed ? 'completed' : ''} ${isHeader ? 'header-text' : ''}"
                                           onclick="app.updateTask([${path}], { isEditing: true })">
                                         ${task.text || 'Untitled task'}
                                     </span>
